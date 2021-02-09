@@ -2,6 +2,21 @@ const http = require("http");
 const { parse } = require("querystring");
 const MongoClient = require("mongodb").MongoClient;
 const assert = require("assert");
+var ObjectId = require("mongodb").ObjectID;
+
+const RESULT_CREATE_ORDER = {
+  SUCCESS: 0x1,
+  ERROR: 0x0,
+};
+
+const RESULT_CHANGE_STATE_ORDER = {
+  SUCCESS: 0x1,
+  ERROR: 0x0,
+}
+
+const STATE_ORDER = {
+  IN_PROCCESSING: 0x0,
+};
 
 const requestListener = function (req, res) {
   const uri =
@@ -12,14 +27,14 @@ const requestListener = function (req, res) {
 
   switch (req.method) {
     case "POST": {
-      console.log(1234);
-
       req.on("data", (chunk) => {
         body += chunk.toString();
       });
 
       req.on("end", () => {
         data = JSON.parse(body);
+
+        // console.log(data);
 
         switch (data.action) {
           case "sign_in": {
@@ -34,9 +49,10 @@ const requestListener = function (req, res) {
                 .collection("users_client_app");
 
               const options = {};
-
               collection
-                .findOne({ login: login }, { password_hash: password_hash })
+                .findOne({
+                  $and: [{ login: login }, { password_hash: password_hash }],
+                })
                 .then((response) => {
                   res.writeHead(200);
                   res.write(JSON.stringify(response));
@@ -127,22 +143,22 @@ const requestListener = function (req, res) {
                 .find({})
                 .limit(10)
                 .toArray((err, items) => {
-
                   let data = {
                     shops: items,
                   };
 
                   res.writeHead(200);
-                  res.write(JSON.stringify(data), 'utf8', (e) => {
-                    console.log("finish")
+                  res.write(JSON.stringify(data), "utf8", (e) => {
+                    console.log("finish");
                     res.end();
                     client.close();
-                  });                  
+                  });
 
                   return;
-                });              
+                });
             });
           }
+
           case "get_shop_info": {
             const client = new MongoClient(uri, { useNewUrlParser: true });
 
@@ -195,6 +211,152 @@ const requestListener = function (req, res) {
               });
             });
 
+            break;
+          }
+
+          case "add_item": {
+            let items = data.data.items_obj.items,
+              items_id_arr = [],
+              itemsProccess = 0;
+
+            for (let i = 0; i < items.length; i++) {
+              let doc = {
+                title: items[i].title,
+                desc: items[i].desc,
+                URL_item: items[i].URL,
+                URL_img: items[i].imgURL,
+                price_per_pice: 0,
+                currency: "",
+                count: items[i].count,
+                size: items[i].size,
+                ID_domain_name_shop: "",
+                ID_physical_address_delivery_point: "",
+              };
+
+              const client = new MongoClient(uri, { useNewUrlParser: true });
+
+              client.connect((err) => {
+                const collection = client.db("shoppingapp").collection("items");
+
+                const options = {};
+
+                collection.insertOne(doc).then((response) => {
+                  items_id_arr.push(response.insertedId);
+
+                  itemsProccess++;
+
+                  if (items.length == itemsProccess) {
+                    let doc = {
+                      QR_code: "",
+                      state: STATE_ORDER.IN_PROCCESSING,
+                      waight: 100,
+                      size: {
+                        x: 10,
+                        y: 10,
+                        z: 10,
+                      },
+                      ID_items: items_id_arr,
+                      type_delivery: "",
+                      delivery_to_door_adrress: "",
+                      ID_postmate: 0,
+                      ID_cell: 10,
+                      ID_user: data.data.user_id,
+                    };
+
+                    const collection = client
+                      .db("shoppingapp")
+                      .collection("orders");
+
+                    collection.insertOne(doc).then((response) => {
+                      res.writeHead(200);
+                      res.write(
+                        JSON.stringify({
+                          result: RESULT_CREATE_ORDER.SUCCESS,
+                        })
+                      );
+                      res.end();
+                    });
+                  }
+
+                  client.close();
+                });
+              });
+            }
+
+            break;
+          }
+
+          case "get_orders": {
+            const client = new MongoClient(uri, { useNewUrlParser: true });
+
+            client.connect((err) => {
+              const collection = client.db("shoppingapp").collection("orders");
+              collection
+                .find({ ID_user: data.data.user_id })
+                .toArray((err, items) => {
+                  res.writeHead(200);
+                  res.write(JSON.stringify(items));
+                  res.end();
+                  client.close();
+                });
+            });
+            break;
+          }
+
+          case "save_user_info": {
+            const client = new MongoClient(uri, { useNewUrlParser: true });
+
+            client.connect((err) => {
+              const collection = client
+                .db("shoppingapp")
+                .collection("users_client_app");
+              collection
+                .updateOne(
+                  { _id: ObjectId(data.data.user_id) },
+                  {
+                    $set: {
+                      first_name: data.data.first_name,
+                      last_name: data.data.last_name,
+                      phone: data.data.phone,
+                      email: data.data.email,
+                    },
+                  }
+                )
+                .then((err, items) => {
+                  res.writeHead(200);
+                  res.end();
+                  client.close();
+                });
+            });
+            break;
+          }
+
+          case "change_order_state": {
+            const client = new MongoClient(uri, { useNewUrlParser: true });
+
+            client.connect((err) => {
+              const collection = client.db("shoppingapp").collection("orders");
+              collection
+                .updateOne(
+                  { _id: ObjectId(data.data.order_id) },
+                  {
+                    $set: {
+                      state: data.data.order_state,
+                    },
+                  }
+                )
+                .then((err, items) => {
+
+                  let data = {
+                    result: RESULT_CHANGE_STATE_ORDER.SUCCESS,
+                  }
+
+                  res.writeHead(200);
+                  res.write(JSON.stringify(data));
+                  res.end();
+                  client.close();
+                });
+            });
             break;
           }
         }
